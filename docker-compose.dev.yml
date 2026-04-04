@@ -1,0 +1,38 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: rails_freighstpot
+    env_file:
+      - .env.development
+    volumes:
+      - .:/rails
+      - bundle_cache:/bundle
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: bash -c "bin/rails db:prepare && bin/rails s -b 0.0.0.0 -p 3000"
+
+  db:
+    image: postgres:15
+    container_name: postgres_freightspot
+    environment:
+      POSTGRES_DB: freightspot_development
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  bundle_cache:

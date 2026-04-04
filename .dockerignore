@@ -1,0 +1,27 @@
+# Ignora cosas locales y temporales
+log/*
+tmp/*
+storage/*
+node_modules
+.bundle
+.byebug_history
+coverage
+spec
+test
+vendor/bundle
+public/assets
+public/packs
+public/packs-test
+app/javascript/**/*.map
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Credentials locales
+config/master.key
+.env.development
