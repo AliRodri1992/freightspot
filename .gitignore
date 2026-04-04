@@ -57,3 +57,5 @@ public/
 lib/tasks/.keep
 
 .kamal/
+
+ruby-advisory-db
