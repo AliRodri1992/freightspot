@@ -1,11 +1,5 @@
 # frozen_string_literal: true
-
-module Support
-  module FactoryBot
-    def self.included(base)
-      base.include FactoryBot::Syntax::Methods
-    end
-  end
+#
+RSpec.configure do |config|
+  config.include FactoryBot::Syntax::Methods
 end
-
-Rspec.configure { |config| config.include Support::FactoryBot }

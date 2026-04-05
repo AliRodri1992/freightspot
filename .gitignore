@@ -64,3 +64,5 @@ ruby-advisory-db
 /node_modules
 
 app/assets/builds/.keep
+
+coverage/
