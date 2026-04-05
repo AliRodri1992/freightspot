@@ -52,8 +52,6 @@ app/controllers/concerns/.keep
 
 script/.keep
 
-public/
-
 lib/tasks/.keep
 
 .kamal/
