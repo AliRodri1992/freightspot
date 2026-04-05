@@ -1,34 +1,56 @@
 # syntax=docker/dockerfile:1
-ARG RUBY_VERSION=3.3.6
-FROM ruby:$RUBY_VERSION-slim
 
+ARG RUBY_VERSION=3.3.6
+FROM docker.io/library/ruby:$RUBY_VERSION-slim
+
+# App path
 WORKDIR /rails
 
-# Dependencias básicas
+# Variables de entorno (DESARROLLO)
+ENV RAILS_ENV=development \
+    NODE_ENV=development \
+    BUNDLE_PATH="/usr/local/bundle"
+
+# Instalar dependencias base
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
-    curl build-essential libpq-dev git apt-transport-https \
-    libvips postgresql-client && \
-    # Node y Yarn para Rails 8
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs wkhtmltopdf && \
-    npm install -g yarn && \
-    rm -rf /var/lib/apt/lists/*
+    curl \
+    build-essential \
+    git \
+    libpq-dev \
+    libyaml-dev \
+    node-gyp \
+    pkg-config \
+    python-is-python3 \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
 
-# Copiamos Gemfiles primero para caching
+# -------- NODE (igual que prod, pero permanente) --------
+ARG NODE_VERSION=24.14.1
+ARG YARN_VERSION=1.22.22
+ENV PATH=/usr/local/node/bin:$PATH
+
+RUN curl -sL https://github.com/nodenv/node-build/archive/master.tar.gz | tar xz -C /tmp/ && \
+    /tmp/node-build-master/bin/node-build "${NODE_VERSION}" /usr/local/node && \
+    npm install -g yarn@$YARN_VERSION && \
+    rm -rf /tmp/node-build-master
+
+# -------- GEMS --------
 COPY Gemfile Gemfile.lock ./
-
-ENV BUNDLE_PATH=/bundle \
-    BUNDLE_JOBS=4 \
-    BUNDLE_RETRY=3
-
 RUN bundle install
 
-# Copiamos el resto del proyecto
+# -------- JS --------
+COPY package.json yarn.lock ./
+RUN yarn install
+
+# -------- APP --------
 COPY . .
 
-# Puerto de desarrollo
+# Crear carpeta builds si no existe
+RUN mkdir -p app/assets/builds
+
+# Exponer puerto Rails
 EXPOSE 3000
 
-# Comando por defecto
-CMD ["bin/rails", "server", "-b", "0.0.0.0", "-p", "3000"]
+# Comando DEV (clave para Bootstrap)
+CMD ["bin/dev"]
