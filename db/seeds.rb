@@ -7,3 +7,6 @@
 #   ["Action", "Comedy", "Drama", "Horror"].each do |genre_name|
 #     MovieGenre.find_or_create_by!(name: genre_name)
 #   end
+Language.create(name: 'English', code: 'en')
+Language.create(name: 'Spanish', code: 'es')
+Language.create(name: 'Portuguese', code: 'pt')

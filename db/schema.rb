@@ -81,6 +81,32 @@ ActiveRecord::Schema[8.0].define(version: 2026_04_05_190514) do
     t.index ["user_id", "user_type"], name: "user_index"
   end
 
+  create_table "languages", force: :cascade do |t|
+    t.string "name"
+    t.string "code"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.datetime "deleted_at", precision: nil
+    t.index ["code"], name: "index_languages_on_code", unique: true
+    t.index ["deleted_at"], name: "index_languages_on_deleted_at"
+    t.index ["name"], name: "index_languages_on_name", unique: true
+  end
+
+  create_table "translates", force: :cascade do |t|
+    t.string "key"
+    t.text "value"
+    t.bigint "language_id", null: false
+    t.string "controller"
+    t.string "view"
+    t.string "status", default: "pending"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.datetime "deleted_at", precision: nil
+    t.index ["deleted_at"], name: "index_translates_on_deleted_at"
+    t.index ["key", "language_id"], name: "index_translates_on_key_and_language_id", unique: true
+    t.index ["language_id"], name: "index_translates_on_language_id"
+  end
+
   create_table "user_activities", force: :cascade do |t|
     t.bigint "user_id", null: false
     t.string "action"
@@ -140,5 +166,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_04_05_190514) do
     t.index ["item_type", "item_id"], name: "index_versions_on_item_type_and_item_id"
   end
 
+  add_foreign_key "translates", "languages"
   add_foreign_key "user_activities", "users"
 end
