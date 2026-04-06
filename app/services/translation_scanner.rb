@@ -2,46 +2,56 @@
 
 # TranslationScanner
 #
-# This service scans all application views and Ruby files to extract
-# translation keys used with the `t` helper.
+# This service scans the Rails application for I18n translation keys.
+# It inspects both view templates (ERB, HAML, Slim) and Ruby files
+# (controllers, helpers, jobs, models) to detect all `t('key')` calls.
 #
-# It collects keys from:
-#   - Views: `.erb`, `.haml`, `.slim`
-#   - Ruby files: controllers, helpers, models, jobs, etc.
+# Features:
+# - Detects translation keys across views and Ruby files.
+# - Returns the controller or folder context and the view file path for each key when available.
+# - Ensures that results are unique to avoid duplicates.
 #
-# Each key is returned with metadata about its origin, including the
-# controller or view it belongs to.
-#
-# Example:
-#   TranslationScanner.scan_all
+# Usage:
+#   results = TranslationScanner.scan_all
 #   # => [
 #   #      { key: "users.show.title", controller: "users", view: "users/show.html.erb" },
-#   #      { key: "flash.notice.saved", controller: "application", view: nil }
+#   #      { key: "welcome.message", controller: "home", view: "home/index.html.erb" }
 #   #    ]
+#
+# Methods:
+#   - .scan_all -> Array<Hash>
+#       Scans all views and Ruby files for translation keys.
+#       Returns an array of hashes with key, controller, and view metadata.
+#   - .controller_from_view(view_path) -> String
+#       Extracts the controller folder name from a view path.
+#   - .controller_from_ruby(file_path) -> String
+#       Extracts the main folder name (controller, helper, model, job) from a Ruby file path.
 class TranslationScanner
-  # Scan all views and Ruby files for translation keys.
+  # Scan all views and Ruby files for translation keys
   #
   # @return [Array<Hash>] An array of hashes with keys:
-  #   - :key[String] the translation key
-  #   - :controller[String, nil] the related controller or folder
-  #   - :view[String, nil] the view file path relative to app/views
+  #   - :key [String] the translation key
+  #   - :controller [String, nil] the related controller or folder
+  #   - :view [String, nil] the view file path relative to app/views
   def self.scan_all
     results = []
 
     # Scan ERB, HAML, and Slim views
-    Rails.root.glob('app/views/**/*.{erb,haml,slim}').each do |file|
-      content = File.read(file)
-      content.scan(/t\(["'](.+?)["']\)/).flatten.each do |key|
-        results << { key: key, controller: controller_from_view(file), view: file.sub(Rails.root.join('app/views/').to_s, '') }
-      end
+    scan_files('app/views/**/*.{erb,haml,slim}') do |file, key|
+      results << {
+        key: key,
+        controller: controller_from_view(file),
+        view: file.sub(Rails.root.join('app/views/').to_s, '')
+      }
     end
 
     # Scan Ruby files (controllers, helpers, models, jobs)
-    Rails.root.glob('app/**/*.{rb}').each do |file|
-      content = File.read(file)
-      content.scan(/t\(["'](.+?)["']\)/).flatten.each do |key|
-        results << { key: key, controller: controller_from_ruby(file), view: nil }
-      end
+    scan_files('app/**/*.{rb}') do |file, key|
+      results << {
+        key: key,
+        controller: controller_from_ruby(file),
+        view: nil
+      }
     end
 
     results.uniq
@@ -52,8 +62,10 @@ class TranslationScanner
   # @param view_path [String] full path of the view file
   # @return [String] the controller folder name
   def self.controller_from_view(view_path)
-    parts = view_path.split('/app/views/').last.split('/')
-    parts.first
+    view_path.split('/app/views/').last.split('/').first
+  rescue StandardError => e
+    Rails.logger.warn("[TranslationScanner] Failed to extract controller from view path '#{view_path}': #{e.message}")
+    'unknown'
   end
 
   # Extracts controller or folder name from a Ruby file path
@@ -61,7 +73,26 @@ class TranslationScanner
   # @param file_path [String] full path of the Ruby file
   # @return [String] the folder name (usually controller, helper, or model)
   def self.controller_from_ruby(file_path)
-    parts = file_path.split('/app/').last.split('/')
-    parts.first
+    file_path.split('/app/').last.split('/').first
+  rescue StandardError => e
+    Rails.logger.warn("[TranslationScanner] Failed to extract controller from Ruby path '#{file_path}': #{e.message}")
+    'unknown'
+  end
+
+  # Helper to safely scan files for translation keys
+  #
+  # @param glob_pattern [String] file glob pattern
+  # @yieldparam file [String] the file path
+  # @yieldparam key [String] translation key found
+  def self.scan_files(glob_pattern)
+    Rails.root.glob(glob_pattern).each do |file|
+      content = File.read(file)
+      content.scan(/t\(["'](.+?)["']\)/).flatten.each do |key|
+        yield(file, key) if block_given?
+      end
+    rescue StandardError => e
+      Rails.logger.warn("[TranslationScanner] Failed to read file '#{file}': #{e.message}")
+      next
+    end
   end
 end
