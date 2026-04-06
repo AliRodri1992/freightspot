@@ -13,4 +13,8 @@ class ApplicationController < ActionController::Base
   def user_for_paper_trail
     current_user&.id || 'Guest'
   end
+
+  def after_sign_in_path_for(resource)
+    stored_location_for(resource) || admin_dashboard_path
+  end
 end

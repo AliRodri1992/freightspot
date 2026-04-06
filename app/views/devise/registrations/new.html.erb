@@ -1,0 +1,53 @@
+<h2>Sign up</h2>
+
+<%= form_for(resource, as: resource_name, url: registration_path(resource_name)) do |f| %>
+
+  <!-- Email -->
+  <div class="mb-3">
+    <%= f.label :email, class: "form-label" %>
+    <%= f.email_field :email, class: "form-control #{'is-invalid' if resource.errors[:email].any?}" %>
+
+    <% if resource.errors[:email].any? %>
+      <div class="invalid-feedback d-block">
+        <% resource.errors[:email].each do |msg| %>
+          <%= "#{resource.class.model_name.human} email #{msg}" %><br>
+        <% end %>
+      </div>
+    <% end %>
+  </div>
+
+  <!-- Password -->
+  <div class="mb-3">
+    <%= f.label :password, class: "form-label" %>
+    <%= f.password_field :password, class: "form-control #{'is-invalid' if resource.errors[:password].any?}" %>
+
+    <% if resource.errors[:password].any? %>
+      <div class="invalid-feedback d-block">
+        <% resource.errors[:password].each do |msg| %>
+          <%= "#{resource.class.model_name.human} password #{msg}" %><br>
+        <% end %>
+      </div>
+    <% end %>
+  </div>
+
+  <!-- Password Confirmation -->
+  <div class="mb-3">
+    <%= f.label :password_confirmation, class: "form-label" %>
+    <%= f.password_field :password_confirmation, class: "form-control #{'is-invalid' if resource.errors[:password_confirmation].any? || resource.errors[:password].any? { |e| e =~ /confirmation/i || e =~ /blank/i } }" %>
+
+    <% # Combinar errores relacionados con password_confirmation y mostrar el nombre del modelo %>
+    <% errors_to_show = resource.errors[:password_confirmation].map { |msg| "#{resource.class.model_name.human} password confirmation #{msg}" } +
+                        resource.errors[:password].select { |msg| msg =~ /confirmation/i || msg =~ /blank/i }
+                                .map { |msg| "#{resource.class.model_name.human} password confirmation #{msg}" } %>
+
+    <% if errors_to_show.any? %>
+      <div class="invalid-feedback d-block">
+        <% errors_to_show.each do |msg| %>
+          <%= msg %><br>
+        <% end %>
+      </div>
+    <% end %>
+  </div>
+
+  <%= f.submit "Sign up", class: "btn btn-primary" %>
+<% end %>
