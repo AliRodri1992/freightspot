@@ -1,8 +1,7 @@
 class Translate < ApplicationRecord
   belongs_to :language
 
-  enum :status, { pending: 'pending', processed: 'processed' }
+  enum :status, { pending: 0, completed: 1, failed: 2 }
 
   validates :key, presence: true
-  validates :key, uniqueness: { scope: :language_id }
 end

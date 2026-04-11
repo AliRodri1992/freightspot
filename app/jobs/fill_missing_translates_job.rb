@@ -1,169 +1,124 @@
-# FillMissingTranslatesJob
-#
-# This job scans all views and Ruby files in the application to detect translation keys,
-# fills missing translations using TranslationService, and generates YAML locale files
-# for each language stored in the database.
-#
-# Workflow:
-#   1. Scan all views and Ruby files using TranslationScanner.
-#   2. For each detected key, check if a Translate record exists for each language.
-#   3. If missing or pending, use TranslationService to generate the translation.
-#   4. Save the translation to the database with status "processed" or "pending".
-#   5. Generate or update YAML files under config/locales/<language_code>.yml
-#
-# Features:
-# - Type-safe translation assignment (translate.value is never nil)
-# - Error handling per translation key to avoid stopping the job
-# - Logs progress, warnings, and errors for debugging
-# - Generates nested YAML files for dot-separated keys
-#
-# Usage:
-#   FillMissingTranslatesJob.perform_later   # Asynchronous execution
-#   FillMissingTranslatesJob.new.perform     # Synchronous execution (testing)
-#
-# Models used:
-#   - Language: represents a language in the system (e.g., en, es, fr)
-#   - Translate: stores translation keys, values, and metadata
-#
-# Services used:
-#   - TranslationService: handles external translation API calls
-#   - TranslationScanner: scans views and Ruby files for translation keys
-#
-# Generated files:
-#   - config/locales/en.yml
-#   - config/locales/es.yml
-#   - config/locales/fr.yml
-#   - ...one YAML per language in the database
-#
-# @see TranslationService
-# @see TranslationScanner
+# app/jobs/fill_missing_translates_job.rb
+require 'net/http'
+require 'uri'
+require 'json'
+
 class FillMissingTranslatesJob < ApplicationJob
   queue_as :default
 
-  # Perform scanning, translation, and YAML generation
-  #
-  # @return [void]
+  LIBRETRANSLATE_URL = 'https://libretranslate.de/translate/'.freeze
+  MAX_RETRIES = 3
+  RETRY_WAIT = 2
+
+  private_constant :LIBRETRANSLATE_URL, :MAX_RETRIES, :RETRY_WAIT
+
   def perform
-    Rails.logger.info('[FillMissingTranslatesJob] Starting translation job...')
+    Rails.logger.info '[FillMissingTranslatesJob] Starting translation job...'
 
-    begin
-      require 'i18n/tasks'
-    rescue LoadError => e
-      Rails.logger.error("[FillMissingTranslatesJob] i18n-tasks gem is missing: #{e.message}")
-      return
-    end
+    missing_translations = TranslationScanner.new.missing_keys
+    Rails.logger.info "[FillMissingTranslatesJob] Found #{missing_translations.size} missing translations"
 
-    i18n = I18n::Tasks::BaseTask.new
-    scanner_results = TranslationScanner.scan_all
-    Rails.logger.info("[FillMissingTranslatesJob] #{scanner_results.size} translation keys detected by scanner")
+    missing_translations.each do |entry|
+      key = entry[:key]
+      source_text = entry[:source_text] || ''
+      locale_code = entry[:locale] || I18n.default_locale.to_s
 
-    Language.find_each do |language|
-      next if language.code == 'en' # English is the source language
+      # Si es Hash (pluralization), usar solo :one
+      if source_text.is_a?(Hash)
+        Rails.logger.info "[FillMissingTranslatesJob] Key #{key} has pluralization hash, using :one for translation"
+        source_text = source_text[:one]
+      end
 
-      # Detect missing keys for this language
-      missing_keys = i18n.missing_keys.select { |k| k[:locale].to_s == language.code }.map { |k| k[:key].to_s }
-      Rails.logger.info("[FillMissingTranslatesJob] #{missing_keys.size} missing keys for #{language.code}")
+      language = Language.find_or_create_by!(code: locale_code)
 
-      # Only process keys detected by scanner AND missing in this language
-      scanner_results.select { |entry| missing_keys.include?(entry[:key]) }.each do |entry|
-        process_translation(entry, language)
+      translate_record = Translate.find_or_initialize_by(key: key, language: language)
+      translate_record.controller = entry[:controller]
+      translate_record.view = entry[:view]
+
+      if translate_record.new_record?
+        Rails.logger.info "[FillMissingTranslatesJob] Creating new Translate record for #{key} (locale: #{locale_code})"
+      else
+        Rails.logger.info "[FillMissingTranslatesJob] Found existing Translate record for #{key} (locale: #{locale_code})"
+      end
+
+      translate_record.pending!
+      translate_record.save!
+      Rails.logger.info "[FillMissingTranslatesJob] Translate record saved with status: #{translate_record.status}"
+
+      begin
+        translated_text = translate_with_retry(source_text, locale_code)
+        Rails.logger.info "[FillMissingTranslatesJob] Translation result for #{key}: #{translated_text}"
+
+        translate_record.update!(value: translated_text)
+        translate_record.completed!
+        Rails.logger.info "[FillMissingTranslatesJob] Translate record updated with status: #{translate_record.status}"
+
+        update_locale_file(locale_code, key, translated_text)
+        Rails.logger.info "[FillMissingTranslatesJob] YAML file updated for locale '#{locale_code}', key: #{key}"
+      rescue StandardError => e
+        translate_record.failed!
+        Rails.logger.error "[FillMissingTranslatesJob] Failed to translate #{key}: #{e.class} - #{e.message}"
       end
     end
 
-    generate_locale_files
-    Rails.logger.info('[FillMissingTranslatesJob] Translation job finished.')
-  rescue StandardError => e
-    Rails.logger.error("[FillMissingTranslatesJob] Unexpected error: #{e.class} #{e}")
+    Rails.logger.info '[FillMissingTranslatesJob] Finished translation job.'
   end
 
   private
 
-  # Processes a single translation key for a given language
-  #
-  # @param entry [Hash] The translation key and metadata (key, controller, view)
-  # @param language [Language] The language record
-  # @return [void]
-  def process_translation(entry, language)
-    translate = Translate.find_or_initialize_by(
-      key: entry[:key],
-      language: language
-    )
-
-    translate.controller ||= entry[:controller]
-    translate.view ||= entry[:view]
-    return if translate.processed?
-
-    source_text = english_source(entry[:key])
-    translated_text = translate_text_with_retry(source_text, language.code) || source_text
-
-    translate.value = translated_text
-    translate.status = translated_text.present? ? 'processed' : 'pending'
-    translate.save!
-  rescue StandardError => e
-    Rails.logger.error("[FillMissingTranslatesJob] Failed to process key '#{entry[:key]}' for #{language.code}: #{e.message}")
-  end
-
-  # Returns the English source text for a translation key
-  #
-  # @param key [String] The translation key
-  # @return [String] The English text or the key itself if not found
-  def english_source(key)
-    I18n::Tasks::BaseTask.new.data['en'].dig(*key.split('.'))&.to_s || key
-  rescue StandardError => e
-    Rails.logger.error("[FillMissingTranslatesJob] Failed to fetch English source for '#{key}': #{e.message}")
-    key
-  end
-
-  # Translates a text string using the TranslationService
-  #
-  # @param text [String] The source text
-  # @param target_code [String] The target language code
-  # @return [String, nil] Translated text or nil if translation fails
-  def translate_text_with_retry(text, target_code)
-    return text if target_code == 'en'
-
-    TranslationService.translate(text, from: 'en', to: target_code)
-  rescue StandardError => e
-    Rails.logger.error("[FillMissingTranslatesJob] TranslationService failed for '#{text}' to '#{target_code}': #{e.message}")
-    nil
-  end
-
-  # Generates YAML files for each language
-  #
-  # Writes nested YAML files under `config/locales/<language_code>.yml`
-  #
-  # @return [void]
-  def generate_locale_files
-    Language.find_each do |language|
-      locale_data = { language.code => {} }
-      language.translates.processed.each do |t|
-        insert_translation(locale_data[language.code], t.key, t.value)
-      end
-
-      file_path = Rails.root.join("config/locales/#{language.code}.yml")
-      File.write(file_path, locale_data.to_yaml)
-      Rails.logger.info("[FillMissingTranslatesJob] YAML file generated: #{file_path}")
+  def translate_with_retry(text, target_locale)
+    attempts = 0
+    begin
+      attempts += 1
+      translate_text(text, target_locale)
     rescue StandardError => e
-      Rails.logger.error("[FillMissingTranslatesJob] Failed to generate YAML for #{language.code}: #{e.message}")
+      if attempts < MAX_RETRIES
+        Rails.logger.warn "[FillMissingTranslatesJob] Retry #{attempts} for text '#{text}' due to #{e.class}"
+        sleep RETRY_WAIT
+        retry
+      else
+        Rails.logger.error "[FillMissingTranslatesJob] Max retries reached for text '#{text}': #{e.message}"
+        raise e
+      end
     end
   end
 
-  # Inserts a translation into a nested hash structure
-  #
-  # Converts dot-separated keys (e.g., 'users.show.title') into nested hashes
-  #
-  # @param hash [Hash] The root hash
-  # @param key [String] The translation key
-  # @param value [String] The translated value
-  # @return [void]
-  def insert_translation(hash, key, value)
-    keys = key.split('.')
-    last_key = keys.pop
+  def translate_text(text, target_locale)
+    uri = URI.parse(LIBRETRANSLATE_URL)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = (uri.scheme == 'https')
+    request = Net::HTTP::Post.new(uri.request_uri)
+    request.set_form_data(q: text, source: 'en', target: target_locale, format: 'text')
+
+    response = http.request(request)
+    raise RuntimeError, "LibreTranslate API returned HTTP #{response.code}" if Integer(response.code, 10) != 200
+
+    result = JSON.parse(response.body)
+    result['translatedText'] || text
+  end
+
+  def update_locale_file(locale, key, value)
+    file_path = Rails.root.join('config', 'locales', "#{locale}.yml")
+    locales_data = File.exist?(file_path) ? YAML.load_file(file_path) : {}
+    locales_data ||= {}
+    locales_data[locale] ||= {}
+    insert_nested_key(locales_data[locale], key.split('.'), value)
+
+    File.write(file_path, locales_data.deep_stringify_keys.to_yaml)
+  rescue StandardError => e
+    Rails.logger.error "[FillMissingTranslatesJob] Failed to update YAML for #{key}: #{e.message}"
+  end
+
+  def insert_nested_key(hash, keys, value)
     current = hash
-    keys.each do |k|
-      current[k] ||= {}
-      current = current[k]
+    keys.each_with_index do |k, idx|
+      k = k.to_s
+      if idx == keys.size - 1
+        current[k] = value
+      else
+        current[k] ||= {}
+        current = current[k]
+      end
     end
-    current[last_key] = value
   end
 end
